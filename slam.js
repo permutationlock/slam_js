@@ -135,7 +135,7 @@ function ray_trace(start_location, end_location, evaluate_cell) {
 	var dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
 	
 	var x = Math.floor(x0), y = Math.floor(y0), n = 1;
-	var x_inc, y_inc, error;
+	var x_inc, y_inc, error = 0.0;
 	
 	if(dx == 0) {
 		x_inc = 0;
@@ -144,12 +144,12 @@ function ray_trace(start_location, end_location, evaluate_cell) {
 	else if(x1 > x0) {
 		x_inc = 1;
 		n += Math.floor(x1) - x;
-		error = (Math.floor(x0) + 1.0 - x0) * dy;
+		error += (Math.floor(x0) + 1.0 - x0) * dy;
 	}
 	else {
 		x_inc = -1;
 		n += x - Math.floor(x1);
-		error = (x0 - Math.floor(x0)) * dy;
+		error += (x0 - Math.floor(x0)) * dy;
 	}
 	
 	if(dy == 0) {
@@ -183,6 +183,74 @@ var beam_measurement_model_t = function(variance, samples) {
 	
 	this.prob_ray = function(robot_location, hit_location, map) {
 		
+	};
+};
+
+/*
+ * particle_filter_t
+ * A simple particle filter to estimate a posterior distribution over a finite
+ * number of sample points. Call predict and weight each timestep to estimate
+ * the posterior distribution. Call resample to eliminate low probability
+ * particles when needed to produce better estimates with lower particle counts.
+ */
+var particle_filter_t = function(prediction_model, weight_model, size, threshold = 0.01) {
+	this.size = size;
+	this.n = 1.0 / size;
+	this.threshold = threshold * this.n;
+	this.prediction_model = prediction_model;
+	this.weight_model = weight_model;
+	this.weights = [];
+	for(var i = 0; i < this.size; ++i) {
+		this.weigths[i] = this.n;
+	}
+	
+	this.predict = function(particles) {
+		var new_particles = [];
+		for(var i = 0; i < this.size; ++i) {
+			new_particlles[i] = this.prediction_model(particles[i]);
+		}
+		return new_particles;
+	};
+	
+	this.weight = function(particles) {
+		var sum = 0.0;
+		for(var i = 0; i < this.size; ++i) {
+			if(this.weights[i] > this.threshold) {
+				this.weights[i] *= this.weight_model(particles[i]);
+			}
+			else {
+				this.weights[i] = 0.0;
+			}
+			sum += this.weights[i];
+		}
+		
+		for(var i = 0; i < this.size; ++i) {
+			if(sum > 0.0000000001) {
+				this.weights[i] /= sum;
+			}
+			else {
+				this.weights[i] = this.n;
+			}
+		}
+	};
+	
+	this.resample = function(particles) {
+		var new_particles = [];
+		var r = Math.random(), c = this.weights[0], i = 0;
+		for(var m = 0; m < this.size; ++m) {
+			var u = r + m * this.n;
+			while(u > c) {
+				++i;
+				c += this.weights[i];
+			}
+			new_particles[m] = particles[i];
+		}
+		
+		for(var i = 0; i < this.size; ++i) {
+			this.weights[i] = this.n;
+		}
+		
+		return new_particles;
 	};
 };
 
