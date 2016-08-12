@@ -170,10 +170,8 @@ function ray_trace(start_location, end_location, evaluate_cell) {
 		error -= (y0 - Math.floor(y0)) * dx;
 	}
 	
-	var distance_per_cell = start_location.distance(end_location) / (1.0 * n);
-	
 	for(; n > 0; --n) {
-		evaluate_cell(x, y, n - 1, distance_per_cell);
+		if(evaluate_cell(x, y, n - 1)) return;
 		if(error > 0) {
 			y += y_inc;
 			error -= dx;
@@ -191,25 +189,80 @@ function ray_trace(start_location, end_location, evaluate_cell) {
  * of measurement vectors and individual measurements for a given map and
  * robot location.
  */
-var beam_measurement_model_t = function(variance, samples) {
+var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 	this.variance = variance;
+	this.max_ray = max_ray;
+	this.size = size;
+	this.samples = samples;
+	this.range_size = size / samples;
+	this.start_index = 0;
+	this.delta_rot = 2.0 * Math.PI / this.size;
 	
-	this.prob_ray = function(robot_location, hit_location, map) {
+	this.prob_ray = function(robot_location, hit_location, map_lookup) {
+		var copy_loc = new robot_location_t(
+				robot_location.x,
+				robot_location.y,
+				robot_location.angle
+			);
 		
+		var ray = location_from_polar(this.max_ray, hit_location.angle);
+		
+		var exp_hit = null;
+		
+		ray_trace(
+				robot_location,
+				copy_loc.add(ray),
+				function(x, y, n) {
+					if(map_lookup(x, y)) {
+						exp_hit = new robot_location_t(x + 0.5, y + 0.5, 0.0);
+						return true;
+					}
+					return false;
+				}
+			);
+		
+		if(end_point != null) {
+			var actual = robot_location.distance(hit_location);
+			var expected = robot_location.distance(exp_hit);
+			return prob_normal(actual, expected, this.variance);
+		}
+		return 1.0;
 	};
+	
+	this.prob_measurement = function(robot_location, measurement, map_lookup) {
+		var q = 1.0;
+		
+		var rot = -1.0 * this.delta_rot * this.start_index;
+		for(var i = 0; i < this.size; i += range_size) {
+			if(measurement[i] != 0.0) {
+				var ray = location_from_polar(measurement[i], rot);
+				var copy_loc = new robot_location_t(
+						robot_location.x,
+						robot_location.y,
+						robot_location.angle
+					);
+				q *= prob_ray(robot_location, copy_loc.add(ray), 
+			}
+			rot -= this.delta_rot;
+		}
+		this.start_index = (this.start_index + 1) % range_size;
+	}
 };
 
 /*
  * particle_filter_t
  * A simple particle filter to estimate a posterior distribution over a finite
  * number of sample points. Call predict and weight each timestep to estimate
- * the posterior distribution. Call resample to eliminate low probability
- * particles when needed to produce better estimates with lower particle counts.
+ * the posterior distribution with controls and measurements. Call resample to
+ * eliminate low probability particles when needed to produce better estimates
+ * with lower particle counts.
  */
-var particle_filter_t = function(prediction_model, weight_model, size, threshold = 0.01) {
+var particle_filter_t = function(prediction_model, weight_model, size,
+	elimination_factor = 0.01)
+{
 	this.size = size;
 	this.n = 1.0 / size;
-	this.threshold = threshold * this.n;
+	this.threshold = elimination_factor * this.n;
 	this.prediction_model = prediction_model;
 	this.weight_model = weight_model;
 	this.weights = [];
@@ -217,19 +270,19 @@ var particle_filter_t = function(prediction_model, weight_model, size, threshold
 		this.weigths[i] = this.n;
 	}
 	
-	this.predict = function(particles) {
+	this.predict = function(particles, control) {
 		var new_particles = [];
 		for(var i = 0; i < this.size; ++i) {
-			new_particlles[i] = this.prediction_model(particles[i]);
+			new_particlles[i] = this.prediction_model(particles[i], control);
 		}
 		return new_particles;
 	};
 	
-	this.weight = function(particles) {
+	this.weight = function(particles, measurement) {
 		var sum = 0.0;
 		for(var i = 0; i < this.size; ++i) {
 			if(this.weights[i] > this.threshold) {
-				this.weights[i] *= this.weight_model(particles[i]);
+				this.weights[i] *= this.weight_model(particles[i], measurement);
 			}
 			else {
 				this.weights[i] = 0.0;
