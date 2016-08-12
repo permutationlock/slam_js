@@ -71,6 +71,14 @@ function location_from_polar(r, angle) {
 }
 
 /*
+ * copy_location
+ * Construct a location_t from another.
+ */
+function copy_location(location) {
+	return new location_t(location.x, location.y, location.angle);
+}
+
+/*
  * control_t
  * Stores odometry information between two timesteps.
  */
@@ -199,14 +207,8 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 	this.delta_rot = 2.0 * Math.PI / this.size;
 	
 	this.prob_ray = function(robot_location, hit_location, map_lookup) {
-		var copy_loc = new robot_location_t(
-				robot_location.x,
-				robot_location.y,
-				robot_location.angle
-			);
-		
+		var copy_loc = copy_location(robot_location);
 		var ray = location_from_polar(this.max_ray, hit_location.angle);
-		
 		var exp_hit = null;
 		
 		ray_trace(
@@ -215,8 +217,10 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 				function(x, y, n) {
 					if(map_lookup(x, y)) {
 						exp_hit = new robot_location_t(x + 0.5, y + 0.5, 0.0);
+						
 						return true;
 					}
+					
 					return false;
 				}
 			);
@@ -224,29 +228,30 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 		if(end_point != null) {
 			var actual = robot_location.distance(hit_location);
 			var expected = robot_location.distance(exp_hit);
+			
 			return prob_normal(actual, expected, this.variance);
 		}
+		
 		return 1.0;
 	};
 	
 	this.prob_measurement = function(robot_location, measurement, map_lookup) {
 		var q = 1.0;
-		
 		var rot = -1.0 * this.delta_rot * this.start_index;
+		
 		for(var i = 0; i < this.size; i += range_size) {
 			if(measurement[i] != 0.0) {
+				var copy_loc = copy_location(robot_location);
 				var ray = location_from_polar(measurement[i], rot);
-				var copy_loc = new robot_location_t(
-						robot_location.x,
-						robot_location.y,
-						robot_location.angle
-					);
+				
 				q *= prob_ray(robot_location, copy_loc.add(ray), 
 			}
+			
 			rot -= this.delta_rot;
 		}
+		
 		this.start_index = (this.start_index + 1) % range_size;
-	}
+	};
 };
 
 /*
@@ -312,6 +317,7 @@ var particle_filter_t = function(prediction_model, weight_model, size,
 	this.resample = function(particles) {
 		var new_particles = [];
 		var r = Math.random(), c = this.weights[0], i = 0;
+		
 		for(var m = 0; m < this.size; ++m) {
 			var u = r + m * this.n;
 			while(u > c) {
@@ -326,6 +332,50 @@ var particle_filter_t = function(prediction_model, weight_model, size,
 		}
 		
 		return new_particles;
+	};
+};
+
+/*
+ * dp_map
+ * Simple two dimensional map with binary occupancy values.
+ */
+var dp_map = function(size) {
+	this.size = size;
+	this.map = [][]{};
+	
+	this.lookup_by_id(x, y, id) {
+		if(this.map[x][y].id != null) {
+			return this.map[x][y][id];
+		}
+		return -1;
+	};
+	
+	this.lookup(x, y, dp_node) {
+		var temp = dp_node;
+		do {
+			var val = lookup_by_id(x, y, temp.id);
+			if(val == 1) {
+				return true;
+			}
+			else if(val == 0) {
+				return false;
+			}
+		} while((temp = temp.parent) != null);
+		return false;
+	};
+	
+	this.update_by_id(value, x, y, id) {
+		this.map[x][y][id] = value;
+	};
+	
+	this.update(value, x, y, dp_node) {
+		var temp = dp_node;
+		do {
+			if(lookup_by_id(x, y, temp.id) != -1) {
+				return;
+			}
+		} while((temp = temp.parent) != null);
+		update_by_id(value, x, y, dp_node.id);
 	};
 };
 
