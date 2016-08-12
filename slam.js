@@ -116,10 +116,11 @@ var odometry_motion_model_t = function(a1, a2, a3, a4) {
 				this.a2 * Math.pow(delta_trans, 2)
 			);
 		
+		var initial = new locaton_t(location.x, location.y, location.angle);
 		var motion = location_from_polar(dhat_r1, dhat_trans);
 		var turn = new location_t(0.0, 0.0, dhat_r2);
 		
-		return location.add(motion).add(turn);
+		return initial.add(motion).add(turn);
 	};
 };
 
@@ -127,7 +128,9 @@ var odometry_motion_model_t = function(a1, a2, a3, a4) {
  * ray_trace
  * Trace a discrete line from start_location to end_location, calling
  * evalute_cell on each cell. The evaluate_cell function must take x and y
- * coordinates, and n the number of cells remaining on the line.
+ * coordinates, and n the number of cells remaining on the line. We also
+ * compute a distance_per_cell value to approximately handle the fact that
+ * diagonal traces will hit more cells than horizontal traces.
  */
 function ray_trace(start_location, end_location, evaluate_cell) {
 	var x0 = start_location.x, y0 = stat_location.y;
@@ -167,8 +170,18 @@ function ray_trace(start_location, end_location, evaluate_cell) {
 		error -= (y0 - Math.floor(y0)) * dx;
 	}
 	
+	var distance_per_cell = start_location.distance(end_location) / (1.0 * n);
+	
 	for(; n > 0; --n) {
-		evaluate_cell(x, y, n - 1);
+		evaluate_cell(x, y, n - 1, distance_per_cell);
+		if(error > 0) {
+			y += y_inc;
+			error -= dx;
+		}
+		else {
+			x += x_inc;
+			error += dy;
+		}
 	}
 };
 
@@ -232,6 +245,15 @@ var particle_filter_t = function(prediction_model, weight_model, size, threshold
 				this.weights[i] = this.n;
 			}
 		}
+	};
+	
+	this.effective_sample_size = function() {
+		var sum = 0.0;
+		for(var i = 0; i < this.size; ++i) {
+			sum += Math.pow(this.weights[i], 2);
+		}
+		
+		return 1.0 / sum;
 	};
 	
 	this.resample = function(particles) {
