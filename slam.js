@@ -32,6 +32,7 @@ function prob_normal(value, mean = 0.0, variance = 1.0) {
  * and comparison of locations.
  */
 var location_t = function(x, y, angle) {
+	var _this = this;
 	_this.x = x;
 	_this.y = y;
 	_this.angle = angle;
@@ -135,7 +136,7 @@ var odometry_motion_model_t = function(a1, a2, a3, a4) {
 
 /*
  * ray_trace
- * Trace a discrete line from start_location to end_location, calling
+ * Trace a rasterized line from start_location to end_location, calling
  * evalute_cell on each cell. The evaluate_cell function must take x and y
  * coordinates, and n the number of cells remaining on the line. We also
  * compute a distance_per_cell value to approximately handle the fact that
@@ -251,12 +252,36 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 			
 			rot -= _this.delta_rot;
 		}
-		
-		_this.start_index = (_this.start_index + 1) % range_size;
 	};
 	
 	_this.update = function(robot_location, measurement, map_update) {
+		var rot = -1.0 * _this.delta_rot * _this.start_index;
 		
+		for(var i = 0; i < _this.size; i += range_size) {
+			if(measurement[i] != 0.0) {
+				var copy_loc = copy_location(robot_location);
+				var ray = location_from_polar(measurement[i], rot);
+				
+				ray_trace(
+						robot_location,
+						copy_loc.add(ray),
+						function(x, y, n) {
+							if(n > 0) {
+								map_update(false, x, y);
+							}
+							else {
+								map_update(true, x, y);
+							}
+						}
+					);
+			}
+			
+			rot -= _this.delta_rot;
+		}
+	};
+	
+	_this.increment = function() {
+		_this.start_index = (_this.start_index + 1) % range_size;
 	};
 };
 
@@ -379,10 +404,11 @@ var dp_map_t = function() {
 		var temp = dp_node;
 		do {
 			if(_this.lookup_by_id(x, y, temp.id) != -1) {
-				return;
+				return false;
 			}
 		} while((temp = temp.parent) != null);
 		_this.update_by_id(value, x, y, dp_node.id);
+		return true;
 	};
 	
 	_this.erase(x, y, id) {
@@ -417,7 +443,7 @@ var dp_node_t = function(id, location, parent) {
 	};
 	
 	_this.trim = function(map) {
-		if(_this.parent == null || _this.parent.id == 0) return;
+		if(_this.parent.id == 0) return;
 		
 		if(!_this.leaf && _this.children == 0) {
 			_this.parent.children -= 1;
@@ -498,19 +524,32 @@ var dp_slam_t = function(size, motion_model, measurement_model, frac = 0.5) {
 		
 		if(_this.particle_filter.effective_sample_size() < resample_size) {
 			var new_particles = _this.particle_filter.resample(particles);
+			
 			for(var i = 0; i < _this.size; ++i) {
 				new_particles[i].leaf = true;
 			}
 			
-			_this.particles = new_particles;
 			for(var i = 0; i < _this.size; ++i) {
 				_this.particles[i].trim();
 			}
+			
+			_this.particles = new_particles;
 		}
 		
 		for(var i = 0; i < _this.size; ++i) {
-			_this.map.update(
+			var dp_node = _this.particles[i];
+			_this.measurement_model.update(
+					_this.particles.location,
+					measurement,
+					function(value, x, y) {
+						if(_this.map.update(value, x, y, dp_node)) {
+							dp_node.add_cell(x, y);
+						}
+					}
+				);
 		}
+		
+		_this.measurement_model.increment();
 	};
 };
 
