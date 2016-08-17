@@ -7,7 +7,7 @@
 
 /*
  * sample_normal
- * Sample a random point according to a normal with the given parameters.
+ * Sample a random point from a normal distribution with the given parameters.
  */
 function sample_normal(mean = 0.0, variance = 1.0) {
 	var u = 1 - Math.random(); // Subtraction to flip [0, 1) to (0, 1].
@@ -45,9 +45,9 @@ var location_t = function(x, y, angle) {
 	
 	_this.equals = function(location) {
 		return (
-				(_this.x == location.x) &&
-				(_this.y == location.y) &&
-				(_this.angle == location.angle)
+				_this.x == location.x &&
+				_this.y == location.y &&
+				_this.angle == location.angle
 			);
 	};
 	
@@ -87,7 +87,14 @@ var control_t = function(current_location, old_location) {
 	_this.current = current_location;
 	_this.old = old_location;
 	
-	_this.still = _this.current.equals(_this.old);
+	_this.update = function(location) {
+		_this.old = _this.current;
+		_this.current = location;
+	};
+	
+	_this.still = function() {
+		return _this.current.equals(_this.old);
+	};
 };
 
 /*
@@ -126,7 +133,7 @@ var odometry_motion_model_t = function(a1, a2, a3, a4) {
 				_this.a2 * Math.pow(delta_trans, 2)
 			);
 		
-		var initial = new locaton_t(location.x, location.y, location.angle);
+		var initial = copy_location(location);
 		var motion = location_from_polar(dhat_r1, dhat_trans);
 		var turn = new location_t(0.0, 0.0, dhat_r2);
 		
@@ -247,7 +254,8 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 				var copy_loc = copy_location(robot_location);
 				var ray = location_from_polar(measurement[i], rot);
 				
-				q *= prob_ray(robot_location, copy_loc.add(ray), map_lookup);
+				p = prob_ray(robot_location, copy_loc.add(ray), map_lookup);
+				q *= Math.max(0.05, p);
 			}
 			
 			rot -= _this.delta_rot;
@@ -304,7 +312,7 @@ var particle_filter_t = function(prediction_model, weight_model, size,
 	_this.weight_model = weight_model;
 	_this.weights = [];
 	for(var i = 0; i < _this.size; ++i) {
-		_this.weigths[i] = _this.n;
+		_this.weights[i] = _this.n;
 	}
 	
 	_this.predict = function(particles, control) {
@@ -348,7 +356,7 @@ var particle_filter_t = function(prediction_model, weight_model, size,
 	
 	_this.resample = function(particles) {
 		var new_particles = [];
-		var r = Math.random(), c = _this.weights[0], i = 0;
+		var r = Math.random() * _this.n, c = _this.weights[0], i = 0;
 		
 		for(var m = 0; m < _this.size; ++m) {
 			var u = r + m * _this.n;
@@ -365,6 +373,15 @@ var particle_filter_t = function(prediction_model, weight_model, size,
 		
 		return new_particles;
 	};
+	
+	_this.sample = function(particles) {
+		var r = Math.random(), c = _this.weights[0], i = 0;	
+		while(r > c) {
+			++i;
+			c += _this.weights[i];
+		}
+		return particles[i];
+	};
 };
 
 /*
@@ -373,16 +390,16 @@ var particle_filter_t = function(prediction_model, weight_model, size,
  */
 var dp_map_t = function() {
 	var _this = this;
-	_this.map = [][][];
+	_this.map = [[[]]];
 	
-	_this.lookup_by_id(x, y, id) {
+	_this.lookup_by_id = function(x, y, id) {
 		if(typeof _this.map[x][y][id] !== "undefined") {
 			return _this.map[x][y][id];
 		}
 		return -1;
 	};
 	
-	_this.lookup(x, y, dp_node) {
+	_this.lookup = function(x, y, dp_node) {
 		var temp = dp_node;
 		do {
 			var val = _this.lookup_by_id(x, y, temp.id);
@@ -396,11 +413,11 @@ var dp_map_t = function() {
 		return false;
 	};
 	
-	_this.update_by_id(value, x, y, id) {
+	_this.update_by_id = function(value, x, y, id) {
 		_this.map[x][y][id] = value;
 	};
 	
-	_this.update(value, x, y, dp_node) {
+	_this.update = function(value, x, y, dp_node) {
 		var temp = dp_node;
 		do {
 			if(_this.lookup_by_id(x, y, temp.id) != -1) {
@@ -411,13 +428,23 @@ var dp_map_t = function() {
 		return true;
 	};
 	
-	_this.erase(x, y, id) {
+	_this.erase = function(x, y, id) {
 		delete _this.map[x][y][id];
 	};
 	
-	_this.rename(x, y, old_id, new_id) {
+	_this.rename = function(x, y, old_id, new_id) {
 		_this.map[x][y][new_id] = _this.map[x][y][old_id];
 		_this.erase(x, y, old_id);
+	};
+	
+	_this.get_map(x_min, x_max, y_min, y_max, dp_node) {
+		var map = [[]];
+		for(var x = x_min; x < x_max; ++x) {
+			for(var y = y_min; y < y_max; ++y) {
+				map[x][y] = _this.lookup(x, y, dp_node);
+			}
+		}
+		return map;
 	};
 };
 
@@ -487,22 +514,21 @@ var dp_slam_t = function(size, motion_model, measurement_model, frac = 0.5) {
 	_this.size = size;
 	_this.resample_size = _this.size * frac;
 	_this.next_id = 0;
-	_this.root = new dp_node_t(next_id++, new location_t(0.0, 0.0, 0.0), null);
+	_this.root = new dp_node_t(_this.next_id++, new location_t(0.0, 0.0, 0.0), null);
 	_this.motion_model = motion_model;
 	_this.measurement_model = measurement_model;
 	_this.particles = [];
 	_this.map = new dp_map_t;
 	for(var i = 0; i < _this.size; ++i) {
-		particles.push(new dp_node_t(
-				next_id++,
+		_this.particles.push(new dp_node_t(
+				_this.next_id++,
 				new location_t(0.0, 0.0, 0.0),
-				root
+				_this.root
 			));
-		
 	}
 	_this.particle_filter = new particle_filter_t(
 			function(dp_node, control) {
-				var location = _this.motion_model.sample(control, particle.location);
+				var location = _this.motion_model.sample(control, dp_node.location);
 				return new dp_node_t(_this.next_id++, location, dp_node);
 			},
 			function(dp_node, measurement) {
@@ -517,7 +543,7 @@ var dp_slam_t = function(size, motion_model, measurement_model, frac = 0.5) {
 			_this.size
 		);
 	
-	_this.update(control, measurement) {
+	_this.update = function(control, measurement) {
 		_this.particle_filter.predict(_this.particles, control);
 		
 		_this.particle_filter.weight(_this.particles, measurement);
@@ -550,6 +576,14 @@ var dp_slam_t = function(size, motion_model, measurement_model, frac = 0.5) {
 		}
 		
 		_this.measurement_model.increment();
+	};
+	
+	_this.sample = function(x_min, x_max, y_min, y_max) {
+		return _this.map.get_map(
+				x_min, x_max,
+				y_min, y_max,
+				_this.particle_filter.sample(_this.particles)
+			);
 	};
 };
 

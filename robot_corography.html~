@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<!--
+    robot_corography.html
+    Aven Bross
+    24 July 2015
+
+    Uses webgl-ggc.js, J3DIMath.js, mersenne-twister.js
+-->
+<html style="overflow: hidden;">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>Wildfire Simulation</title>
+<style>
+#canvas-container {
+    position: absolute;
+    left: 0px;
+    top: 0px;
+    width: calc(100%);
+    text-align: center;
+}
+canvas {
+   display: inline;
+}
+</style>
+</head>
+<body onload="appMain('can1')"
+    style="overflow: hidden; margin: 0; padding: 0; background-color: #000000;">
+    
+<div id="can1text"
+    style="position: absolute; left: 20px; top: 10px;"></div>
+<div id="canvas-container">
+<canvas id="can1" width="400" height="400"
+    style="margin: 0; padding: 0; border:1px solid #000000;"></canvas>
+</div>
+
+<script id="vshader1" type="x-shader/x-vertex">
+// Vertex Shader #1
+
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+
+attribute vec4 vertex_attr;
+attribute vec4 color_attr;
+
+varying vec4 color_var;
+varying vec3 ptobjcoords;
+
+void main()
+{
+    // Compute projected vertex position
+    gl_Position = projectionMatrix * modelViewMatrix * vertex_attr;
+
+    // Send color to fragment shader
+    color_var = color_attr;
+
+    // Send object coordinates to fragment shader
+    ptobjcoords = vertex_attr.xyz / vertex_attr.w;
+}
+</script>
+
+<script id="fshader1" type="x-shader/x-fragment">
+// Fragment Shader #1
+
+#ifdef GL_ES
+precision mediump float;
+#endif
+
+varying vec4 color_var;
+varying vec3 ptobjcoords;
+
+void main()
+{
+    // Set color
+    gl_FragColor = color_var;
+}
+</script>
+
+<script type="text/javascript" src="include/J3DIMath.js"></script>
+<script type="text/javascript" src="include/webgl-ggc.js"></script>
+<script type="text/javascript" src="include/mersenne-twister.js"></script>
+<script type="text/javascript" src="src/slam.js"></script>
+<script type="text/javascript">
+// Application Code
+
+// Global variables
+
+// General
+var canvas;             // Our canvas
+var cwidth, cheight;    // Canvas width & height
+var gl;                 // WebGL context
+var redisplay_needed;   // True if redisplay needed
+
+var isClicked = false;
+var totaltime = 0;
+
+// Shaders
+var prog1;              // Shader program object
+
+// Random number generator
+var rng = new MersenneTwister();
+
+// Array of all lines in the scene
+var lines = []
+var lastScan = [];
+
+// Current point
+var setPoint = null;
+var resolution = 16;
+
+var cartogrobot;
+var theoreticalLocation;
+var theoreticalOrientation;
+
+var ws;
+
+
+// Robot, made it a class for some reason...
+function robot(x, y, angle){
+    this.x = x;
+    this.y = y;
+    this.angle = angle;
+    
+    // Scans environment with given density and returns distance vectors
+    this.scan = function(scanLines){
+        // The vector of distance scans to be reported
+        var data = [];
+    
+        // Setup initial angle and delta
+        var angle = this.angle;
+        var delta = 2.0*Math.PI / scanLines;
+        
+        // Scan in a circle, starting at the robot's current orientation
+        for(var i=0; i<scanLines; i++){
+            
+            // Calculate scan line
+            var scanLine = {p1: { x: this.x, y: this.y },
+                            p2: { x: Math.cos(angle)*100, y: Math.sin(angle)*100 }};
+            
+            // Tracks the closest intersection
+            var bestPoint = null;
+            var bestLine = null;
+            
+            // Look at all lines and find intersections
+            for(var j=0; j<lines.length; j++){
+                line = lines[j];
+                
+                var point = intersection(scanLine, line);
+                
+                if(point != null){
+                    var polar = { r: Math.sqrt(Math.pow(this.x-point.x, 2)+Math.pow(this.y-point.y, 2)), angle: Math.atan2(point.y, point.x) };
+                    
+                    if(bestPoint == null || polar.r < bestPoint.r){
+                        bestPoint = polar;
+                        bestLine = { p1: { x: this.x, y: this.y }, p2: point };
+                    }
+                }
+            }
+            
+            // Save closest intersection as the distance scan
+            if(bestPoint != null){
+                data.push(bestPoint);
+                //console.log(bestPoint);
+                lastScan.push(bestLine);
+            }
+            
+            // Increment the angle
+            angle += delta;
+            
+            // Correct into the range [0,2pi)
+            if(angle >= 2.0*Math.PI){
+                angle -= 2.0*Math.PI;
+            }
+        }
+        
+        console.log(data.length);
+        
+        return data;
+    };
+}
+
+// Find the intersection between two line segments if it exists and returns it in polar coordinates
+function intersection(line1, line2){
+    var x12 = line1.p1.x - line1.p2.x;
+    var x34 = line2.p1.x - line2.p2.x;
+    var y12 = line1.p1.y - line1.p2.y;
+    var y34 = line2.p1.y - line2.p2.y;
+
+    var c = x12 * y34 - y12 * x34;
+    
+    // Intersection
+    var a = line1.p1.x * line1.p2.y - line1.p1.y * line1.p2.x;
+    var b = line2.p1.x * line2.p2.y - line2.p1.y * line2.p2.x;
+
+    var x = (a * x34 - b * x12) / c;
+    var y = (a * y34 - b * y12) / c;
+    
+    //Check the intersection is on the line segments
+    if((x >= line1.p1.x && x <= line1.p2.x) || (x <= line1.p1.x && x >= line1.p2.x)){
+        if((y >= line1.p1.y && y <= line1.p2.y) || (y <= line1.p1.y && y >= line1.p2.y)){
+            if((x >= line2.p1.x && x <= line2.p2.x) || (x <= line2.p1.x && x >= line2.p2.x)){
+                if((y >= line2.p1.y && y <= line2.p2.y) || (y <= line2.p1.y && y >= line2.p2.y)){
+                    //console.log(x + ", " + y);
+                    // Convert to polar and return
+                    return {x: x, y: y};
+                }
+            }
+        }
+    }
+
+    // If not, return 
+    return null;
+}
+
+function wsInit(){
+	sendData(scan());
+}
+
+function sendReset(){
+    ws.send("r");
+}
+
+function sendData(data){
+    var msg = "d,";
+    
+    // Format data
+    for(var i=0; i<data.length; i++){
+        var polar = data[i];
+        msg += polar.r.toString();
+        msg += ",";
+        msg += polar.angle.toString();
+        msg += ",";
+    }
+    
+    // Remove extra comma
+    msg = msg.substring(0, msg.length - 1);
+    
+    ws.send(msg);
+}
+
+function recieveData(e){
+    var args = e.data.split(",");
+    theoreticalLocation = { x: parseFloat(args[0]), y: parseFloat(args[1]) };
+    theoreticalOrientation = parseFloat(args[2]);
+}
+
+// WebGL Functions
+
+function myDisplay()
+{
+    gl.clearColor(0.7, 0.7, 0.7, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    gl.useProgram(prog1);
+
+    gl.mvMatrix.makeIdentity();
+    gl.mvMatrix.translate(0., 0., -19.);
+    pushMvMatrix(gl);
+    
+    drawLines(gl, lines, 0., 0., 0.);
+    drawLines(gl, lastScan, 1., 0., 0.);
+    
+    var theoLine = { p1 :{x: theoreticalLocation.x, y: theoreticalLocation.y},
+                     p2 :{x: theoreticalLocation.x + Math.cos(theoreticalOrientation)*4,
+                          y: theoreticalLocation.y + Math.sin(theoreticalOrientation)*4} };
+    var orieLine = { p1 :{x: cartogrobot.x, y: cartogrobot.y},
+                     p2 :{x: cartogrobot.x + Math.cos(cartogrobot.angle)*4,
+                          y: cartogrobot.y + Math.sin(cartogrobot.angle)*4} };
+    drawLines(gl, [ theoLine ], 0., 0., 1.);
+    drawLines(gl, [orieLine], 0., 1., 0.);
+    drawPoints(gl);
+    
+    popMvMatrix(gl);
+
+    gl.flush();
+}
+
+
+function myIdle()
+{
+    // Get elapsed time
+    var elapsedtime = getElapsedTime(0.1); // Param: max value to return
+    totaltime += elapsedtime;   // Track total elapsed time
+    
+    //redisplay_needed = true;
+}
+
+
+function myReshape(w, h)
+{
+    // Set up viewport
+    gl.viewport(0, 0, w, h);
+
+    // Set up projection
+    gl.pMatrix.makeIdentity();
+    gl.pMatrix.perspective(60., w/h, 0.1, 20.0);
+}
+
+function scan(){
+    while(lastScan.length > 0){
+        lastScan.pop();
+    }
+    var data = cartogrobot.scan(resolution);
+    redisplay_needed = true;
+    return data;
+}
+
+
+function myKeyboard(ch)
+{
+    // Note: Escape, arrows, etc. are handled inconsistently between
+    //  browsers. Alas! So we only deal with printable ASCII.
+    switch (ch)
+    {
+        case ' ':
+            sendData(scan());
+            break;
+        case 'r':
+        case 'R':
+            // Clear all lines from the scene
+            while(lines.length > 4){
+                lines.pop();
+            }
+            cartogrobot.x = 0.0;
+            cartogrobot.y = 0.0;
+            cartogrobot.angle = 0.0;
+            theoreticalPosition = { x: 0.0, y: 0.0 };
+            theoreticalOrientation = 0.0;
+            sendReset();
+            sendData(scan());
+            redisplay_needed = true;
+            break;
+        case 's':
+        case 'S':
+            cartogrobot.x -= Math.cos(cartogrobot.angle)*0.5;
+            cartogrobot.y -= Math.sin(cartogrobot.angle)*0.5;
+            scan();
+            break;
+        case 'w':
+        case 'W':
+            cartogrobot.x += Math.cos(cartogrobot.angle)*0.5;
+            cartogrobot.y += Math.sin(cartogrobot.angle)*0.5;
+            scan();
+            break;
+        case 'a':
+        case 'A':
+            cartogrobot.angle += Math.PI/24;
+            if(cartogrobot.angle < 0){
+                cartogrobot.angle += 2*Math.PI;
+            }
+            scan();
+            break;
+        case 'd':
+        case 'D':
+            cartogrobot.angle -= Math.PI/24;
+            if(cartogrobot.angle > 2*Math.PI){
+                cartogrobot.angle -= 2*Math.PI;
+            }
+            scan();
+            break;
+        case 'q':
+        case 'Q':
+            resolution -= 4;
+            scan();
+            break;
+        case 'e':
+        case 'E':
+            resolution += 4;
+            scan();
+            break;
+        default:
+            break;
+    }
+}
+
+
+function myMouseMove(x,y){
+}
+
+
+function myMouseDown(x,y, right_click){
+    var point = { x: x, y: y };
+    if(setPoint == null){
+        setPoint = point;
+    }
+    else{
+        var line = { p1: setPoint, p2: point };
+        lines.push(line);
+        setPoint = null;
+        scan();
+    }
+    
+    redisplay_needed = true;
+}
+
+
+function myMouseUp(x,y){
+}
+
+
+function init()
+{
+    ws = new WebSocket("ws://127.0.0.1:9999/");
+    ws.onmessage = recieveData;
+    ws.onopen = wsInit;
+    
+    // Initialize variables here
+    cartogrobot = new robot(0.0,0.0,0.0);
+    
+    theoreticalLocation = {x: 0.0, y: 0.0};
+    theoreticalOrientation = 0.0;
+    
+    lines.push({p1: {x: -11.0, y: -11.0}, p2: {x: -11.0, y: 11.0}});
+    lines.push({p1: {x: -11.0, y: -11.0}, p2: {x: 11.0, y: -11.0}});
+    lines.push({p1: {x: 11.0, y: 11.0}, p2: {x: 11.0, y: -11.0}});
+    lines.push({p1: {x: 11.0, y: 11.0}, p2: {x: -11.0, y: 11.0}});
+
+    // Shaders
+    prog1 = makeProgramObjectFromIds(gl, 'vshader1', 'fshader1');
+}
+
+
+// Below is kind of a mini-GLUT
+//
+// Call appMain(canvasId) to start up the app (on document load?)
+//
+// These global variables should be declared:
+//     canvas           - Our canvas object
+//     cwidth           - Width of canvas (pixels)
+//     cheight          - Height of canvas (pixels)
+//     gl               - WebGL context
+//     redisplay_needed - Set to true to indicate redisplay needed
+//
+// These functions will be called as needed, if they exist:
+//     init
+//     myDisplay
+//     myReshape
+//     myIdle
+//     myKeyboard
+
+
+// doFrame
+// Should be called repeatedly. Calls myIdle and, if needed, myReshape,
+// myDisplay.
+function doFrame()
+{
+    // Idle
+    if (myIdle) myIdle();
+
+    // Reshape if necessary
+    if (canvas.width != cwidth || canvas.height != cheight)
+    {
+        cwidth = canvas.width;
+        cheight = canvas.height;
+        if (myReshape) myReshape(cwidth, cheight);
+        redisplay_needed=true;
+    }
+
+    // Display if necessary
+    if (redisplay_needed)
+    {
+        redisplay_needed = false;
+        if (myDisplay) myDisplay();
+    }
+}
+
+
+// sizeCanvas
+// Called on window resize events
+function sizeCanvas()  // Might be given an event argument; ignored
+{
+    /*var w = window.innerWidth-200;
+    var h = window.innerHeight
+    // Make our canvas fill the window
+    if(w>h){
+        canvas.width = h;
+        canvas.height = h;
+    }
+    else{
+        canvas.width = w;
+        canvas.height = w;
+    }*/
+}
+
+
+// doKeypress
+// Called on keypress event
+function doKeypress(evt)
+{
+    if (evt.charCode && myKeyboard)
+        myKeyboard(String.fromCharCode(evt.charCode));
+}
+
+// doMouseMove
+// Called on mousemove event
+function doMouseMove(evt){
+    var x = ((evt.clientX-(window.innerWidth-canvas.width)/2)/cwidth)*22-11;;
+    var y = (evt.clientY/cheight)*(-22)+11;
+    if(myMouseMove) myMouseMove(x, y);
+}
+
+// doMouseDown
+// Called on click event
+function doMouseDown(evt){
+    var x = ((evt.clientX-(window.innerWidth-canvas.width)/2)/cwidth)*22-11;;
+    var y = (evt.clientY/cheight)*(-22)+11;
+    if(myMouseDown) myMouseDown(x, y);
+}
+
+function doMouseUp(evt){
+    var x = ((evt.clientX-(window.innerWidth-canvas.width)/2)/cwidth)*22-11;;
+    var y = (evt.clientY/cheight)*(-22)+11;
+    if(myMouseUp) myMouseUp(x, y);
+}
+
+function stopContext(evt){
+    evt.preventDefault();
+}
+
+// addEvent
+// Used to add an extra event to the resize event without overwriting
+var addEvent = function(elem, type, eventHandle) {
+    if (elem == null || typeof(elem) == 'undefined') return;
+    if ( elem.addEventListener ) {
+        elem.addEventListener( type, eventHandle, false );
+    } else if ( elem.attachEvent ) {
+        elem.attachEvent( "on" + type, eventHandle );
+    } else {
+        elem["on"+type]=eventHandle;
+    }
+}
+
+// appMain
+// Our "main" function
+function appMain(canvasId)
+{
+    // Initialize canvas, gl
+    canvas = getCanvas(canvasId);
+    gl = getGlContext(canvas);
+    if (!gl)
+        return;
+
+    // Application-specific initialization
+    if (init) init();
+
+    // Add event listeners
+    sizeCanvas();
+    addEvent(window, "resize", sizeCanvas);
+    document.addEventListener('keypress', doKeypress, false);
+    document.getElementById("can1").addEventListener('mousemove', doMouseMove, false);
+    document.getElementById("can1").addEventListener('mousedown', doMouseDown, false);
+    document.getElementById("can1").addEventListener('contextmenu', stopContext, false);
+    document.getElementById("can1").addEventListener('mouseup', doMouseUp, false);
+
+    // Do our main loop
+    redisplay_needed = true;
+    animate(doFrame);
+}
+
+// Draws the roads in one draw call with VBO
+function drawLines(ctx, lineArray, r, g, b)
+{
+    // Get attribute locations
+    var attriblocs = getAttribLocs(ctx);
+    if (!attriblocs)
+    {
+        errOut(arguments.callee.name + ': ' +
+               'Could not get attribute locations');
+        return;
+    }
+
+    // Create VBOs
+    var buffs = new Array(5);
+    var datas = new Array(5);
+    var array_size = 4*2*lineArray.length;
+    for (var i = 0; i < 5; ++i)
+    {
+        buffs[i] = ctx.createBuffer();
+        var components = (i == 2 || i == 4) ? 3 : 4;
+        datas[i] = new Float32Array(components*array_size);
+    }
+    
+    var b4 = 0;
+    var b3 = 0;
+    
+    for(var i=0; i<lineArray.length; i++){
+        var line = lineArray[i];
+        
+        // vertex coords
+        datas[0][b4+0] = line.p1.x;
+        datas[0][b4+1] = line.p1.y;
+        datas[0][b4+2] = 0.;
+        datas[0][b4+3] = 1.;
+        datas[0][b4+4] = line.p2.x;
+        datas[0][b4+5] = line.p2.y;
+        datas[0][b4+6] = 0.;
+        datas[0][b4+7] = 1.;
+
+        // color
+        datas[1][b4+0] = r;
+        datas[1][b4+1] = g;
+        datas[1][b4+2] = b;
+        datas[1][b4+3] = 1.;
+        datas[1][b4+4] = r;
+        datas[1][b4+5] = g;
+        datas[1][b4+6] = b;
+        datas[1][b4+7] = 1.;
+
+        // normal
+        datas[2][b3+0] = 0.;
+        datas[2][b3+1] = 0.;
+        datas[2][b3+2] = 1.;
+        datas[2][b3+3] = 0.;
+        datas[2][b3+4] = 0.;
+        datas[2][b3+5] = 1.;
+
+        // texture coords
+        datas[3][b4+0] = line.p1.x;
+        datas[3][b4+1] = line.p1.y;
+        datas[3][b4+2] = 0.;
+        datas[3][b4+3] = 1.;
+        datas[3][b4+4] = line.p2.x;
+        datas[3][b4+5] = line.p2.y;
+        datas[3][b4+6] = 0.;
+        datas[3][b4+7] = 1.;
+
+        // tangent
+        datas[4][b3+0] = 1.;
+        datas[4][b3+1] = 0.;
+        datas[4][b3+2] = 0.;
+        datas[4][b3+3] = 1.;
+        datas[4][b3+4] = 0.;
+        datas[4][b3+5] = 0.;
+        
+        b4 += 8;
+        b3 += 6;
+    }
+    
+    for (var i in attriblocs)
+    {
+        if (attriblocs[i] == -1)
+            continue;
+        var components = (i == 2 || i == 4) ? 3 : 4;
+        ctx.bindBuffer(ctx.ARRAY_BUFFER, buffs[i]);
+        ctx.bufferData(
+            ctx.ARRAY_BUFFER, datas[i], ctx.STATIC_DRAW);
+        ctx.vertexAttribPointer(
+            attriblocs[i], components, ctx.FLOAT, false, 0, 0);
+    }
+
+    // Set up uniforms, enable attributes
+    sendMatrices(ctx);
+    for (var i in attriblocs)
+        if (attriblocs[i] != -1)
+            ctx.enableVertexAttribArray(attriblocs[i]);
+
+    // Draw with VBO
+    ctx.drawArrays(ctx.LINES, 0, array_size);
+
+    // Disable attributes
+    for (var i in attriblocs)
+        if (attriblocs[i] != -1)
+            ctx.disableVertexAttribArray(attriblocs[i]);
+
+    // Delete buffer objects
+    for (i in buffs)
+        ctx.deleteBuffer(buffs[i]);
+}
+
+// Draws the roads in one draw call with VBO
+function drawPoints(ctx)
+{
+    // Get attribute locations
+    var attriblocs = getAttribLocs(ctx);
+    if (!attriblocs)
+    {
+        errOut(arguments.callee.name + ': ' +
+               'Could not get attribute locations');
+        return;
+    }
+
+    // Create VBOs
+    var buffs = new Array(5);
+    var datas = new Array(5);
+    var array_size = 4*3;
+    for (var i = 0; i < 5; ++i)
+    {
+        buffs[i] = ctx.createBuffer();
+        var components = (i == 2 || i == 4) ? 3 : 4;
+        datas[i] = new Float32Array(components*array_size);
+    }
+    
+    var spx = 1000.0;
+    var spy = 1000.0;
+    
+    if(setPoint != null){
+        spx = setPoint.x;
+        spy = setPoint.y;
+    }
+        
+    // vertex coords
+    datas[0][0] = cartogrobot.x;
+    datas[0][1] = cartogrobot.y;
+    datas[0][2] = 0.;
+    datas[0][3] = 1.;
+    datas[0][4] = spx;
+    datas[0][5] = spy;
+    datas[0][6] = 0.;
+    datas[0][7] = 1.;
+    datas[0][8] = theoreticalLocation.x;
+    datas[0][9] = theoreticalLocation.y;
+    datas[0][10] = 0.;
+    datas[0][11] = 1.;
+
+    // color
+    datas[1][0] = 0.;
+    datas[1][1] = 1.;
+    datas[1][2] = 0.;
+    datas[1][3] = 1.;
+    datas[1][4] = 0.;
+    datas[1][5] = 0.;
+    datas[1][6] = 0.;
+    datas[1][7] = 1.;
+    datas[1][8] = 0.;
+    datas[1][9] = 0.;
+    datas[1][10] = 0.;
+    datas[1][11] = 1.;
+
+    // normal
+    datas[2][0] = 0.;
+    datas[2][1] = 0.;
+    datas[2][2] = 1.;
+    datas[2][3] = 0.;
+    datas[2][4] = 0.;
+    datas[2][5] = 1.;
+    datas[2][6] = 0.;
+    datas[2][7] = 0.;
+    datas[2][8] = 1.;
+
+    // texture coords
+    datas[3][0] = cartogrobot.x;
+    datas[3][1] = cartogrobot.y;
+    datas[3][2] = 0.;
+    datas[3][3] = 1.;
+    datas[3][4] = spx;
+    datas[3][5] = spy;
+    datas[3][6] = 0.;
+    datas[3][7] = 1.;
+    datas[3][8] = theoreticalLocation.x;
+    datas[3][9] = theoreticalLocation.y;
+    datas[3][10] = 0.;
+    datas[3][11] = 1.;
+
+    // tangent
+    datas[4][0] = 1.;
+    datas[4][1] = 0.;
+    datas[4][2] = 0.;
+    datas[4][3] = 1.;
+    datas[4][4] = 0.;
+    datas[4][5] = 0.;
+    datas[4][6] = 1.;
+    datas[4][7] = 0.;
+    datas[4][8] = 0.;
+    
+    for (var i in attriblocs)
+    {
+        if (attriblocs[i] == -1)
+            continue;
+        var components = (i == 2 || i == 4) ? 3 : 4;
+        ctx.bindBuffer(ctx.ARRAY_BUFFER, buffs[i]);
+        ctx.bufferData(
+            ctx.ARRAY_BUFFER, datas[i], ctx.STATIC_DRAW);
+        ctx.vertexAttribPointer(
+            attriblocs[i], components, ctx.FLOAT, false, 0, 0);
+    }
+
+    // Set up uniforms, enable attributes
+    sendMatrices(ctx);
+    for (var i in attriblocs)
+        if (attriblocs[i] != -1)
+            ctx.enableVertexAttribArray(attriblocs[i]);
+
+    // Draw with VBO
+    ctx.drawArrays(ctx.POINTS, 0, array_size);
+
+    // Disable attributes
+    for (var i in attriblocs)
+        if (attriblocs[i] != -1)
+            ctx.disableVertexAttribArray(attriblocs[i]);
+
+    // Delete buffer objects
+    for (i in buffs)
+        ctx.deleteBuffer(buffs[i]);
+}
+
+</script>
+</body>
+</html>
