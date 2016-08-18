@@ -276,13 +276,26 @@
 			}
 			
 			function update() {
-				control.update(new location_t(
+				if(control.last.equals(cartogrobot)) {
+					control.update(new location_t(
 						cartogrobot.x,
 						cartogrobot.y,
 						cartogrobot.angle
 					));
-				
+				}
+				else {
+					control.update(new location_t(
+							cartogrobot.x + sample_normal(0.0, 0.0001),
+							cartogrobot.y + sample_normal(0.0, 0.0001),
+							cartogrobot.angle + sample_normal(0.0, 0.00001)
+						));
+				}
 				dp_slam.update(control, scan());
+				
+				var sample = dp_slam.sample(0,0,0,0);
+				theoreticalLocation.x = sample.location.x;
+				theoreticalLocation.y = sample.location.y;
+				theoreticalOrientation = sample.location.angle;
 			}
 
 			function myKeyboard(ch)
@@ -385,8 +398,8 @@
 			function init() {
 				// Initialize variables here
 				cartogrobot = new robot(0.0,0.0,0.0);
-				var motion = new odometry_motion_model_t(0.01, 0.01, 0.01, 0.01);
-				var measurement = new beam_measurement_model_t(1.0, 20.0, 36, 360);
+				var motion = new odometry_motion_model_t(0.0001, 0.0001, 0.0001, 0.0001);
+				var measurement = new beam_measurement_model_t(4.0, 20.0, 18, 360);
 				dp_slam = new dp_slam_t(100, motion, measurement);
 				control = new control_t(
 						new location_t(0.0, 0.0, 0.0),
