@@ -91,13 +91,14 @@
 
 			// Current point
 			var setPoint = null;
-			var resolution = 16;
+			var resolution = 360;
 
 			var cartogrobot;
 			var theoreticalLocation;
 			var theoreticalOrientation;
 			
 			var dp_slam;
+			var control;
 
 			// Robot, made it a class for some reason...
 			function robot(x, y, angle) {
@@ -150,9 +151,12 @@
 						
 						// Save closest intersection as the distance scan
 						if(bestPoint != null) {
-						    data.push(bestPoint);
+						    data.push(bestPoint.r);
 						    //console.log(bestPoint);
 						    lastScan.push(bestLine);
+						}
+						else {
+							data.push(0.0);
 						}
 						
 						// Increment the angle
@@ -244,13 +248,15 @@
 				// Get elapsed time
 				var elapsedtime = getElapsedTime(0.1); // Param: max value to return
 				totaltime += elapsedtime;   // Track total elapsed time
-		
+				
+				if(totaltime > 1.0) {
+					// update here maybe
+				}
 				//redisplay_needed = true;
 			}
 
 
-			function myReshape(w, h)
-			{
+			function myReshape(w, h) {
 				// Set up viewport
 				gl.viewport(0, 0, w, h);
 
@@ -260,7 +266,7 @@
 				redisplay_needed = true;
 			}
 
-			function scan(){
+			function scan() {
 				while(lastScan.length > 0){
 					lastScan.pop();
 				}
@@ -268,7 +274,16 @@
 				redisplay_needed = true;
 				return data;
 			}
-
+			
+			function update() {
+				control.update(new location_t(
+						cartogrobot.x,
+						cartogrobot.y,
+						cartogrobot.angle
+					));
+				
+				dp_slam.update(control, scan());
+			}
 
 			function myKeyboard(ch)
 			{
@@ -277,7 +292,7 @@
 				switch (ch)
 				{
 					case ' ':
-						sendData(scan());
+						update();
 						break;
 					case 'c':
 					case 'C':
@@ -305,13 +320,13 @@
 					case 'S':
 						cartogrobot.x -= Math.cos(cartogrobot.angle)*0.1;
 						cartogrobot.y -= Math.sin(cartogrobot.angle)*0.1;
-						scan();
+						redisplay_needed = true;
 						break;
 					case 'w':
 					case 'W':
 						cartogrobot.x += Math.cos(cartogrobot.angle)*0.1;
 						cartogrobot.y += Math.sin(cartogrobot.angle)*0.1;
-						scan();
+						redisplay_needed = true;
 						break;
 					case 'a':
 					case 'A':
@@ -319,7 +334,7 @@
 						if(cartogrobot.angle < 0){
 						    cartogrobot.angle += 2*Math.PI;
 						}
-						scan();
+						redisplay_needed = true;
 						break;
 					case 'd':
 					case 'D':
@@ -327,17 +342,15 @@
 						if(cartogrobot.angle > 2*Math.PI){
 						    cartogrobot.angle -= 2*Math.PI;
 						}
-						scan();
+						redisplay_needed = true;
 						break;
 					case 'q':
 					case 'Q':
 						resolution -= 4;
-						scan();
 						break;
 					case 'e':
 					case 'E':
 						resolution += 4;
-						scan();
 						break;
 					default:
 						break;
@@ -375,6 +388,10 @@
 				var motion = new odometry_motion_model_t(0.01, 0.01, 0.01, 0.01);
 				var measurement = new beam_measurement_model_t(1.0, 20.0, 36, 360);
 				dp_slam = new dp_slam_t(100, motion, measurement);
+				control = new control_t(
+						new location_t(0.0, 0.0, 0.0),
+						new location_t(0.0, 0.0, 0.0)
+					);
 		
 				theoreticalLocation = {x: 0.0, y: 0.0};
 				theoreticalOrientation = 0.0;
