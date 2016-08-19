@@ -37,10 +37,10 @@ var location_t = function(x, y, angle) {
 	_this.y = y;
 	_this.angle = angle;
 	
-	_this.add = function(location) {
-		_this.x += location.x;
-		_this.y += location.y;
-		_this.angle += location.angle;
+	_this.add = function(r, angle) {
+		_this.angle += angle;
+		_this.x += Math.cos(_this.angle) * r;
+		_this.y += Math.sin(_this.angle) * r;
 	};
 	
 	_this.equals = function(location) {
@@ -58,17 +58,6 @@ var location_t = function(x, y, angle) {
 			);
 	};
 };
-
-/*
- * location_from_polar
- * Construct a location_t from polar coordinates.
- */
-function location_from_polar(r, angle) {
-	var x = Math.cos(angle) * r;
-	var y = Math.sin(angle) * r;
-	
-	return new location_t(x, y, angle);
-}
 
 /*
  * copy_location
@@ -137,8 +126,8 @@ var odometry_motion_model_t = function(a1, a2, a3, a4) {
 			);
 		
 		var new_location = copy_location(location);
-		new_location.add(location_from_polar(dhat_trans, dhat_r1));
-		new_location.add(location_from_polar(0.0, dhat_r2));
+		new_location.add(dhat_trans, dhat_r1);
+		new_location.add(0.0, dhat_r2);
 		
 		return new_location;
 	};
@@ -157,49 +146,54 @@ function ray_trace(start_location, end_location, evaluate_cell) {
 	var x1 = end_location.x, y1 = end_location.y;
 	var dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
 	
-	var x = Math.floor(x0), y = Math.floor(y0), n = 1;
-	var x_inc, y_inc, error = 0.0;
+	var x = Math.floor(x0), y = Math.floor(y0);
+	var dt_dx = 1.0 / dx, dt_dy = 1.0 / dy;
 	
-	if(dx == 0) {
-		x_inc = 0;
-		error = 100000;
-	}
-	else if(x1 > x0) {
-		x_inc = 1;
-		n += Math.floor(x1) - x;
-		error += (Math.floor(x0) + 1.0 - x0) * dy;
-	}
-	else {
-		x_inc = -1;
-		n += x - Math.floor(x1);
-		error += (x0 - Math.floor(x0)) * dy;
-	}
+	var t = 0, t_next_vertical, t_next_horizontal;
+	var n = 1, x_inc, y_inc;
 	
-	if(dy == 0) {
-		y_inc = 0;
-		error = -100000;
-	}
-	else if(y1 > y0) {
-		y_inc = 1;
-		n += Math.floor(y1) - y;
-		error = (Math.floor(y0) + 1.0 - y0) * dx;
-	}
-	else {
-		y_inc = -1;
-		n += y - Math.floor(y1);
-		error -= (y0 - Math.floor(y0)) * dx;
-	}
+	if (dx == 0) {
+        x_inc = 0;
+        t_next_horizontal = dt_dx; // infinity
+    }
+    else if (x1 > x0) {
+        x_inc = 1;
+        n += Math.floor(x1) - x;
+        t_next_horizontal = (Math.floor(x0) + 1 - x0) * dt_dx;
+    }
+    else {
+        x_inc = -1;
+        n += x - Math.floor(x1);
+        t_next_horizontal = (x0 - Math.floor(x0)) * dt_dx;
+    }
+
+    if (dy == 0) {
+        y_inc = 0;
+        t_next_vertical = dt_dy; // infinity
+    }
+    else if (y1 > y0) {
+        y_inc = 1;
+        n += Math.floor(y1) - y;
+        t_next_vertical = (Math.floor(y0) + 1 - y0) * dt_dy;
+    }
+    else {
+        y_inc = -1;
+        n += y - Math.floor(y1);
+        t_next_vertical = (y0 - Math.floor(y0)) * dt_dy;
+    }
 	
 	for(; n > 0; --n) {
 		if(evaluate_cell(x, y, n - 1)) return;
-		if(error > 0) {
-			y += y_inc;
-			error -= dx;
-		}
-		else {
-			x += x_inc;
-			error += dy;
-		}
+		if (t_next_vertical < t_next_horizontal) {
+            y += y_inc;
+            t = t_next_vertical;
+            t_next_vertical += dt_dy;
+        }
+        else {
+            x += x_inc;
+            t = t_next_horizontal;
+            t_next_horizontal += dt_dx;
+        }
 	}
 };
 
@@ -221,7 +215,7 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 	
 	_this.prob_ray = function(robot_location, hit_location, map_lookup) {
 		var end_location = copy_location(robot_location);
-		end_location.add(location_from_polar(_this.max_ray, hit_location.angle));
+		end_location.add(_this.max_ray, hit_location.angle);
 		var exp_hit = null;
 		
 		ray_trace(
@@ -252,44 +246,47 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 		var q = 1.0;
 		var rot = 1.0 * _this.delta_rot * _this.start_index;
 		
-		for(var i = 0; i < _this.size; i += _this.range_size) {
+		for(var i = _this.start_index; i < _this.size; i += _this.range_size) {
 			if(measurement[i] != 0.0) {
 				var hit_location = copy_location(robot_location);
-				hit_location.add(location_from_polar(measurement[i], rot));
+				hit_location.add(measurement[i], rot);
 				
 				p = _this.prob_ray(robot_location, hit_location, map_lookup);
-				q *= Math.max(0.05, p);
+				q *= Math.max(0.001, p);
 			}
 			
-			rot += _this.delta_rot;
+			rot += _this.delta_rot * _this.range_size;
 		}
-		console.log(q);
+		//console.log(q);
 		return q;
 	};
 	
 	_this.update = function(robot_location, measurement, map_update) {
 		var rot = 1.0 * _this.delta_rot * _this.start_index;
 		
-		for(var i = 0; i < _this.size; i += _this.range_size) {
+		for(var i = _this.start_index; i < _this.size; i += _this.range_size) {
 			if(measurement[i] != 0.0) {
 				var hit_location = copy_location(robot_location);
-				hit_location.add(location_from_polar(measurement[i], rot));
+				hit_location.add(measurement[i], rot);
+				
+				//console.log("measurement " + i + " length " + measurement[i]
+					//+ " hit (" + hit_location.x + ", " + hit_location.y + ")");
 				
 				ray_trace(
 						robot_location,
 						hit_location,
 						function(x, y, n) {
-							if(n > 0) {
+							if(n > 1) {
 								map_update(false, x, y);
 							}
-							else {
+							else if(n == 0) {
 								map_update(true, x, y);
 							}
 						}
 					);
 			}
 			
-			rot += _this.delta_rot;
+			rot += _this.delta_rot * _this.range_size;
 		}
 	};
 	
@@ -426,9 +423,10 @@ var dp_map_t = function() {
 			_this.map[x] = [];
 		}
 		if(typeof _this.map[x][y] == "undefined") {
-			_this.map[x][y] = [];
+			_this.map[x][y] = {};
 		}
 		_this.map[x][y][id] = value;
+		//console.log("setting map[" + x + "][" + y + "][" + id + " = " + value);
 	};
 	
 	_this.update = function(value, x, y, dp_node) {
@@ -452,8 +450,9 @@ var dp_map_t = function() {
 	};
 	
 	_this.get_map = function(x_min, x_max, y_min, y_max, dp_node) {
-		var map = [[]];
+		var map = [];
 		for(var x = x_min; x < x_max; ++x) {
+			map[x] = [];
 			for(var y = y_min; y < y_max; ++y) {
 				map[x][y] = _this.lookup(x, y, dp_node);
 			}
@@ -582,7 +581,7 @@ var dp_slam_t = function(size, motion_model, measurement_model, frac = 0.5) {
 				new_particles[i].leaf = true;
 			}
 			
-			console.log("trimming particle tree");
+			//console.log("trimming particle tree");
 			for(var i = 0; i < _this.size; ++i) {
 				_this.particles[i].trim(_this.map);
 			}
@@ -597,7 +596,7 @@ var dp_slam_t = function(size, motion_model, measurement_model, frac = 0.5) {
 			}
 		}
 		
-		console.log("updating maps");
+		//console.log("updating maps");
 		for(var i = 0; i < _this.size; ++i) {
 			var dp_node = _this.particles[i];
 			_this.measurement_model.update(

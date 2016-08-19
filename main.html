@@ -75,7 +75,7 @@
 			var cwidth, cheight;    // Canvas width & height
 			var gl;                 // WebGL context
 			var redisplay_needed;   // True if redisplay needed
-
+			
 			var isClicked = false;
 			var totaltime = 0;
 
@@ -99,6 +99,8 @@
 			
 			var dp_slam;
 			var control;
+			var map;
+			var x_min = 0, x_max = 0, y_min = 0, y_max = 0;
 
 			// Robot, made it a class for some reason...
 			function robot(x, y, angle) {
@@ -224,9 +226,10 @@
 				gl.mvMatrix.makeIdentity();
 				gl.mvMatrix.translate(0., 0., -19.);
 				pushMvMatrix(gl);
-		
-				drawLines(gl, lines, 0., 0., 0.);
-				drawLines(gl, lastScan, 0.9, 0., 0.);
+				
+				drawGrid(gl);		
+				drawLines(gl, lines, 0., 0., 0., 1.0);
+				drawLines(gl, lastScan, 0.9, 0., 0., 0.5);
 		
 				var theoLine = { p1 :{x: theoreticalLocation.x, y: theoreticalLocation.y},
 						         p2 :{x: theoreticalLocation.x + Math.cos(theoreticalOrientation)*2,
@@ -234,9 +237,8 @@
 				var orieLine = { p1 :{x: cartogrobot.x, y: cartogrobot.y},
 						         p2 :{x: cartogrobot.x + Math.cos(cartogrobot.angle)*2,
 						              y: cartogrobot.y + Math.sin(cartogrobot.angle)*2} };
-				drawLines(gl, [ theoLine ], 0., 0., 0.7);
-				drawLines(gl, [orieLine], 0., 0.7, 0.1);
-				drawPoints(gl);
+				drawLines(gl, [ theoLine ], 0., 0., 0.7, 1.0);
+				drawLines(gl, [orieLine], 0., 0.7, 0.1, 1.0);
 		
 				popMvMatrix(gl);
 
@@ -292,10 +294,17 @@
 				}
 				dp_slam.update(control, scan());
 				
-				var sample = dp_slam.sample(0,0,0,0);
+				var x_dist = Math.ceil(11 * cwidth / cheight);
+				x_min = -1 * x_dist;
+				x_max = 1 + x_dist;
+				
+				var sample = dp_slam.sample(x_min, x_max, y_min, y_max);
+				
 				theoreticalLocation.x = sample.location.x;
 				theoreticalLocation.y = sample.location.y;
 				theoreticalOrientation = sample.location.angle;
+				
+				map = sample.map;
 			}
 
 			function myKeyboard(ch)
@@ -344,17 +353,11 @@
 					case 'a':
 					case 'A':
 						cartogrobot.angle += Math.PI/72;
-						if(cartogrobot.angle < 0){
-						    cartogrobot.angle += 2*Math.PI;
-						}
 						redisplay_needed = true;
 						break;
 					case 'd':
 					case 'D':
 						cartogrobot.angle -= Math.PI/72;
-						if(cartogrobot.angle > 2*Math.PI){
-						    cartogrobot.angle -= 2*Math.PI;
-						}
 						redisplay_needed = true;
 						break;
 					case 'q':
@@ -398,9 +401,9 @@
 			function init() {
 				// Initialize variables here
 				cartogrobot = new robot(0.0,0.0,0.0);
-				var motion = new odometry_motion_model_t(0.0001, 0.0001, 0.0001, 0.0001);
+				var motion = new odometry_motion_model_t(0.00001, 0.00001, 0.0001, 0.00001);
 				var measurement = new beam_measurement_model_t(4.0, 20.0, 18, 360);
-				dp_slam = new dp_slam_t(100, motion, measurement);
+				dp_slam = new dp_slam_t(300, motion, measurement);
 				control = new control_t(
 						new location_t(0.0, 0.0, 0.0),
 						new location_t(0.0, 0.0, 0.0)
@@ -408,6 +411,14 @@
 		
 				theoreticalLocation = {x: 0.0, y: 0.0};
 				theoreticalOrientation = 0.0;
+				
+				y_min = -11;
+				y_max = 11;
+				var x_dist = Math.ceil(11 * cwidth / cheight);
+				x_min = -1 * x_dist;
+				x_max = 1 + x_dist;
+				
+				update();
 
 				// Shaders
 				prog1 = makeProgramObjectFromIds(gl, 'vshader1', 'fshader1');
@@ -549,8 +560,8 @@
 				animate(doFrame);
 			}
 
-			// Draws the roads in one draw call with VBO
-			function drawLines(ctx, lineArray, r, g, b) {
+			// draw set of lines in one call with vbo
+			function drawLines(ctx, lineArray, r, g, b, a) {
 				// Get attribute locations
 				var attriblocs = getAttribLocs(ctx);
 				if (!attriblocs) {
@@ -589,11 +600,11 @@
 					datas[1][b4+0] = r;
 					datas[1][b4+1] = g;
 					datas[1][b4+2] = b;
-					datas[1][b4+3] = 1.;
+					datas[1][b4+3] = a;
 					datas[1][b4+4] = r;
 					datas[1][b4+5] = g;
 					datas[1][b4+6] = b;
-					datas[1][b4+7] = 1.;
+					datas[1][b4+7] = a;
 
 					// normal
 					datas[2][b3+0] = 0.;
@@ -653,13 +664,15 @@
 				// Delete buffer objects
 				for (i in buffs)
 					ctx.deleteBuffer(buffs[i]);
-			}
-
-			// Draws the roads in one draw call with VBO
-			function drawPoints(ctx) {
+			}	
+			
+			// Draws the forest in one draw call with VBO
+			function drawGrid(ctx)
+			{
 				// Get attribute locations
 				var attriblocs = getAttribLocs(ctx);
-				if (!attriblocs) {
+				if (!attriblocs)
+				{
 					errOut(arguments.callee.name + ': ' +
 						   'Could not get attribute locations');
 					return;
@@ -668,86 +681,61 @@
 				// Create VBOs
 				var buffs = new Array(5);
 				var datas = new Array(5);
-				var array_size = 4*3;
-				for (var i = 0; i < 5; ++i) {
+				var array_size = 6 * Math.ceil(1 + 22 * cwidth / cheight) * (22);
+				for (var i = 0; i < 5; ++i)
+				{
 					buffs[i] = ctx.createBuffer();
 					var components = (i == 2 || i == 4) ? 3 : 4;
-					datas[i] = new Float32Array(components*array_size);
+					datas[i] = new Float32Array(components * array_size);
 				}
-		
-				var spx = 1000.0;
-				var spy = 1000.0;
-		
-				if(setPoint != null) {
-					spx = setPoint.x;
-					spy = setPoint.y;
+				var b4 = 0;
+				var b3 = 0;
+				for(var x = x_min; x < x_max; x++){
+					for(var y = y_min; y < y_max; y++){
+						var color = 0.9;
+					    if(map[x][y]) color = 0.5;
+						for (var i = 0; i < 6; ++i)
+						{
+						    var t_x = (i == 1 || i == 4 || i == 5) ? 0. : 1.;
+						    var t_y = (i == 2 || i == 3 || i == 5) ? 0. : 1.;
+						    
+						    var size = 0.95;
+						    
+						    // vertex coords
+						    datas[0][b4+0] = x + (t_x) * size;
+						    datas[0][b4+1] = y + (t_y) * size;
+						    datas[0][b4+2] = 0.;
+						    datas[0][b4+3] = 1.;
+
+						    // color
+						    datas[1][b4+0] = color;
+						    datas[1][b4+1] = color;
+						    datas[1][b4+2] = color;
+						    datas[1][b4+3] = 0.5;
+
+						    // normal
+						    datas[2][b3+0] = 0.;
+						    datas[2][b3+1] = 0.;
+						    datas[2][b3+2] = 1.;
+
+						    // texture coords
+						    datas[3][b4+0] = x;
+						    datas[3][b4+1] = y;
+						    datas[3][b4+2] = 0.;
+						    datas[3][b4+3] = 1.;
+
+						    // tangent
+						    datas[4][b3+0] = 1.;
+						    datas[4][b3+1] = 0.;
+						    datas[4][b3+2] = 0.;
+						    
+						    b4 += 4;
+						    b3 += 3;
+						}
+					}
 				}
-				
-				// vertex coords
-				datas[0][0] = cartogrobot.x;
-				datas[0][1] = cartogrobot.y;
-				datas[0][2] = 0.;
-				datas[0][3] = 1.;
-				datas[0][4] = spx;
-				datas[0][5] = spy;
-				datas[0][6] = 0.;
-				datas[0][7] = 1.;
-				datas[0][8] = theoreticalLocation.x;
-				datas[0][9] = theoreticalLocation.y;
-				datas[0][10] = 0.;
-				datas[0][11] = 1.;
-
-				// color
-				datas[1][0] = 0.;
-				datas[1][1] = 1.;
-				datas[1][2] = 0.;
-				datas[1][3] = 1.;
-				datas[1][4] = 0.;
-				datas[1][5] = 0.;
-				datas[1][6] = 0.;
-				datas[1][7] = 1.;
-				datas[1][8] = 0.;
-				datas[1][9] = 0.;
-				datas[1][10] = 0.;
-				datas[1][11] = 1.;
-
-				// normal
-				datas[2][0] = 0.;
-				datas[2][1] = 0.;
-				datas[2][2] = 1.;
-				datas[2][3] = 0.;
-				datas[2][4] = 0.;
-				datas[2][5] = 1.;
-				datas[2][6] = 0.;
-				datas[2][7] = 0.;
-				datas[2][8] = 1.;
-
-				// texture coords
-				datas[3][0] = cartogrobot.x;
-				datas[3][1] = cartogrobot.y;
-				datas[3][2] = 0.;
-				datas[3][3] = 1.;
-				datas[3][4] = spx;
-				datas[3][5] = spy;
-				datas[3][6] = 0.;
-				datas[3][7] = 1.;
-				datas[3][8] = theoreticalLocation.x;
-				datas[3][9] = theoreticalLocation.y;
-				datas[3][10] = 0.;
-				datas[3][11] = 1.;
-
-				// tangent
-				datas[4][0] = 1.;
-				datas[4][1] = 0.;
-				datas[4][2] = 0.;
-				datas[4][3] = 1.;
-				datas[4][4] = 0.;
-				datas[4][5] = 0.;
-				datas[4][6] = 1.;
-				datas[4][7] = 0.;
-				datas[4][8] = 0.;
-		
-				for (var i in attriblocs) {
+				for (var i in attriblocs)
+				{
 					if (attriblocs[i] == -1)
 						continue;
 					var components = (i == 2 || i == 4) ? 3 : 4;
@@ -765,7 +753,7 @@
 						ctx.enableVertexAttribArray(attriblocs[i]);
 
 				// Draw with VBO
-				ctx.drawArrays(ctx.POINTS, 0, array_size);
+				ctx.drawArrays(ctx.TRIANGLES, 0, array_size);
 
 				// Disable attributes
 				for (var i in attriblocs)
@@ -775,7 +763,7 @@
 				// Delete buffer objects
 				for (i in buffs)
 					ctx.deleteBuffer(buffs[i]);
-			}								
+			}			
 		</script>
 	</body>
 </html>
