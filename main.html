@@ -92,6 +92,9 @@
 			// Current point
 			var setPoint = null;
 			var resolution = 360;
+			
+			var pause = false;
+			var first_run = true;
 
 			var cartogrobot;
 			var theoreticalLocation;
@@ -153,7 +156,7 @@
 						
 						// Save closest intersection as the distance scan
 						if(bestPoint != null) {
-						    data.push(bestPoint.r);
+						    data.push(bestPoint.r + sample_normal(0.0, 0.001));
 						    //console.log(bestPoint);
 						    lastScan.push(bestLine);
 						}
@@ -170,7 +173,7 @@
 						}
 					}
 				
-					console.log(data.length);
+					//console.log(data.length);
 				
 					return data;
 				};
@@ -252,7 +255,14 @@
 				totaltime += elapsedtime;   // Track total elapsed time
 				
 				if(totaltime > 1.0) {
-					// update here maybe
+					if(pause == false) {
+						update();
+					}
+					if(first_run == true) {
+						pause = true;
+						first_run = false;
+					}
+					totaltime = 0.0;
 				}
 				//redisplay_needed = true;
 			}
@@ -314,7 +324,7 @@
 				switch (ch)
 				{
 					case ' ':
-						update();
+						pause = !pause;
 						break;
 					case 'c':
 					case 'C':
@@ -402,8 +412,8 @@
 				// Initialize variables here
 				cartogrobot = new robot(0.0,0.0,0.0);
 				var motion = new odometry_motion_model_t(0.00001, 0.00001, 0.0001, 0.00001);
-				var measurement = new beam_measurement_model_t(4.0, 20.0, 18, 360);
-				dp_slam = new dp_slam_t(300, motion, measurement);
+				var measurement = new beam_measurement_model_t(2.0, 20.0, 36, 360);
+				dp_slam = new dp_slam_t(50, motion, measurement);
 				control = new control_t(
 						new location_t(0.0, 0.0, 0.0),
 						new location_t(0.0, 0.0, 0.0)
@@ -419,6 +429,7 @@
 				x_max = 1 + x_dist;
 				
 				update();
+				redisplay_needed = true;
 
 				// Shaders
 				prog1 = makeProgramObjectFromIds(gl, 'vshader1', 'fshader1');

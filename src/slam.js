@@ -236,7 +236,7 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 			var actual = robot_location.distance(hit_location);
 			var expected = robot_location.distance(exp_hit);
 			
-			return prob_normal(actual, expected, _this.variance);
+			return prob_normal(actual, expected, _this.variance) * 100.0;
 		}
 		
 		return 1.0;
@@ -252,7 +252,7 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 				hit_location.add(measurement[i], rot);
 				
 				p = _this.prob_ray(robot_location, hit_location, map_lookup);
-				q *= Math.max(0.001, p);
+				q *= p;
 			}
 			
 			rot += _this.delta_rot * _this.range_size;
@@ -261,7 +261,7 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 		return q;
 	};
 	
-	_this.update = function(robot_location, measurement, map_update) {
+	_this.update = function(robot_location, measurement, map_lookup, map_update) {
 		var rot = 1.0 * _this.delta_rot * _this.start_index;
 		
 		for(var i = _this.start_index; i < _this.size; i += _this.range_size) {
@@ -276,12 +276,11 @@ var beam_measurement_model_t = function(variance, max_ray, samples, size) {
 						robot_location,
 						hit_location,
 						function(x, y, n) {
-							if(n > 1) {
-								map_update(false, x, y);
-							}
+							if(n > 1 && map_lookup(x, y) == true) return true;
 							else if(n == 0) {
 								map_update(true, x, y);
 							}
+							return false;
 						}
 					);
 			}
@@ -338,7 +337,7 @@ var particle_filter_t = function(prediction_model, weight_model, size,
 		}
 		
 		for(var i = 0; i < _this.size; ++i) {
-			if(sum > 0.0000000001) {
+			if(sum > 0.0000000000000000000000001) {
 				_this.weights[i] /= sum;
 			}
 			else {
@@ -566,13 +565,14 @@ var dp_slam_t = function(size, motion_model, measurement_model, frac = 0.5) {
 		);
 	
 	_this.update = function(control, measurement) {
-		console.log("predicting particles");
+		//console.log("predicting particles");
 		_this.particles = _this.particle_filter.predict(_this.particles, control);
 		
-		console.log("weighting particles");
+		//console.log("weighting particles");
 		_this.particle_filter.weight(_this.particles, measurement);
 		
-		console.log("checking for resample particles");
+		//console.log("checking for resample particles");
+		console.log(_this.particle_filter.effective_sample_size());
 		if(_this.particle_filter.effective_sample_size() < _this.resample_size) {
 			console.log("resampling particles");
 			var new_particles = _this.particle_filter.resample(_this.particles);
@@ -602,6 +602,9 @@ var dp_slam_t = function(size, motion_model, measurement_model, frac = 0.5) {
 			_this.measurement_model.update(
 					dp_node.location,
 					measurement,
+					function(x, y) {
+							return _this.map.lookup(x, y, dp_node);
+						},
 					function(value, x, y) {
 						if(_this.map.update(value, x, y, dp_node)) {
 							dp_node.add_cell(x, y);
