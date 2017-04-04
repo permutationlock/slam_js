@@ -628,4 +628,3 @@ var dp_slam_t = function(size, motion_model, measurement_model, frac = 0.5) {
 			};
 	};
 };
-
