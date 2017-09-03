@@ -6,7 +6,7 @@
 
 ### Modular Design
  A "modular" design that allows different map, motion, and sensor models. We
- first provided an implementation of a basic particle filter. We then use this
+ first provide an implementation of a basic particle filter. We then use this
  particle filter to construct a generic implementation of the DP SLAM algorithm
  as a JavaScript class.
  
