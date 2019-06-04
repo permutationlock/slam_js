@@ -28,4 +28,6 @@
  what the current sampled particle predicts the robot's position and orientation
  to be.
 
-
+### Funding
+ This project was produced during an NSF funded research assistantship for the the
+ ITEST research project (see [robotmoose.com](https://robotmoose.com/intro/)).
